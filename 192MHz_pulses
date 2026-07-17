@@ -1,0 +1,70 @@
+module top(
+    input  wire CLK12,
+
+    output wire LED0,
+    output wire LED1,
+    output wire LED2,
+    output wire LED3,
+    output wire LED4,
+    output wire LED5,
+    output wire LED6,
+    output wire LED7,
+
+    output wire LVDS_OUT_P,
+    output wire LVDS_OUT_N
+);
+
+    // User LEDs are active-low, so drive them high to keep them off.
+    assign LED0 = 1'b1;
+    assign LED1 = 1'b1;
+    assign LED2 = 1'b1;
+    assign LED3 = 1'b1;
+    assign LED4 = 1'b1;
+    assign LED5 = 1'b1;
+    assign LED6 = 1'b1;
+    assign LED7 = 1'b1;
+
+    wire clk192;
+    wire pll_lock;
+
+    // Convert the 12 MHz input clock to 192 MHz.
+    EHXPLLL #(
+        .CLKI_DIV(1),
+        .CLKFB_DIV(16),
+        .CLKOP_DIV(1),
+        .FEEDBK_PATH("CLKOP"),
+        .CLKOP_ENABLE("ENABLED"),
+        .CLKOP_CPHASE(0),
+        .CLKOP_FPHASE(0)
+    ) pll_inst (
+        .CLKI(CLK12),
+        .CLKFB(clk192),
+        .CLKOP(clk192),
+        .LOCK(pll_lock),
+        .RST(1'b0)
+    );
+
+    // 192 MHz clock:
+    // Count 192,000,000 cycles to produce one pulse each second.
+    // The pulse remains high for one clock cycle, approximately 5.21 ns.
+    reg [27:0] slow_count = 28'd0;
+    reg pulse = 1'b0;
+
+    always @(posedge clk192) begin
+        if (slow_count == 28'd191999999) begin
+            slow_count <= 28'd0;
+            pulse <= 1'b1;
+        end else begin
+            slow_count <= slow_count + 1'b1;
+            pulse <= 1'b0;
+        end
+    end
+
+    // Differential LVDS output buffer.
+    OLVDS lvds_buf (
+        .A(pulse),
+        .Z(LVDS_OUT_P),
+        .ZN(LVDS_OUT_N)
+    );
+
+endmodule
