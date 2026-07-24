@@ -1,0 +1,171 @@
+module top(
+    input  wire CLK12,
+
+    output wire LED0,
+    output wire LED1,
+    output wire LED2,
+    output wire LED3,
+    output wire LED4,
+    output wire LED5,
+    output wire LED6,
+    output wire LED7,
+
+    output wire LVDS_OUT_P,
+    output wire LVDS_OUT_N
+);
+
+    // User LEDs are active-low.
+    // Drive them high to keep all LEDs off.
+    assign LED0 = 1'b1;
+    assign LED1 = 1'b1;
+    assign LED2 = 1'b1;
+    assign LED3 = 1'b1;
+    assign LED4 = 1'b1;
+    assign LED5 = 1'b1;
+    assign LED6 = 1'b1;
+    assign LED7 = 1'b1;
+
+
+    // ================================================================
+    // PLL: 12 MHz input -> 192 MHz
+    //
+    // One 192 MHz clock period:
+    //
+    //     1 / 192 MHz = 5.208 ns
+    //
+    // ================================================================
+
+    wire clk192;
+    wire pll_lock;
+
+    EHXPLLL #(
+        .CLKI_DIV       (1),
+        .CLKFB_DIV      (16),
+        .CLKOP_DIV      (1),
+        .FEEDBK_PATH    ("CLKOP"),
+        .CLKOP_ENABLE   ("ENABLED"),
+        .CLKOP_CPHASE   (0),
+        .CLKOP_FPHASE   (0)
+    ) PLL_inst (
+        .CLKI   (CLK12),
+        .CLKOP  (clk192),
+        .LOCK   (pll_lock)
+    );
+
+
+    // ================================================================
+    // Generate one event every second using the 12 MHz clock.
+    //
+    // The toggle signal is used so the one-second event can be passed
+    // safely into the 192 MHz clock domain.
+    // ================================================================
+
+    reg [23:0] second_counter = 24'd0;
+    reg        second_toggle  = 1'b0;
+
+    always @(posedge CLK12) begin
+        if (second_counter == 24'd11999999) begin
+            second_counter <= 24'd0;
+            second_toggle  <= ~second_toggle;
+        end
+        else begin
+            second_counter <= second_counter + 1'b1;
+        end
+    end
+
+
+    // ================================================================
+    // Synchronize the one-second toggle into the 192 MHz clock domain.
+    // ================================================================
+
+    reg toggle_sync_1 = 1'b0;
+    reg toggle_sync_2 = 1'b0;
+    reg toggle_delayed = 1'b0;
+
+    wire start_burst;
+
+    assign start_burst = toggle_sync_2 ^ toggle_delayed;
+
+
+    // ================================================================
+    // Ten-pulse burst generator
+    //
+    // burst_phase:
+    //
+    //     phase 0  : output high
+    //     phase 1  : output low
+    //     phase 2  : output high
+    //     phase 3  : output low
+    //          ...
+    //     phase 18 : output high   (pulse 10)
+    //     phase 19 : output low
+    //
+    // Each phase lasts one 192 MHz clock period = 5.208 ns.
+    //
+    // Pulse width:        5.208 ns
+    // Time between pulses: 5.208 ns
+    // Pulse period:       10.417 ns
+    // Pulse frequency:    96 MHz
+    // Pulses per burst:   10
+    // Bursts per second:  1
+    // ================================================================
+
+    reg       burst_active = 1'b0;
+    reg [4:0] burst_phase  = 5'd0;
+
+    always @(posedge clk192) begin
+
+        if (!pll_lock) begin
+            toggle_sync_1 <= 1'b0;
+            toggle_sync_2 <= 1'b0;
+            toggle_delayed <= 1'b0;
+
+            burst_active <= 1'b0;
+            burst_phase  <= 5'd0;
+        end
+        else begin
+
+            // Synchronize the one-second toggle.
+            toggle_sync_1 <= second_toggle;
+            toggle_sync_2 <= toggle_sync_1;
+            toggle_delayed <= toggle_sync_2;
+
+            // Start a new ten-pulse burst.
+            if (start_burst) begin
+                burst_active <= 1'b1;
+                burst_phase  <= 5'd0;
+            end
+
+            // Advance through the 20 high/low phases.
+            else if (burst_active) begin
+                if (burst_phase == 5'd7) begin
+                    burst_active <= 1'b0;
+                    burst_phase  <= 5'd0;
+                end
+                else begin
+                    burst_phase <= burst_phase + 1'b1;
+                end
+            end
+        end
+    end
+
+
+    // Output is high on even-numbered phases:
+    // 0, 2, 4, ..., 18 = ten pulses.
+    wire burst_pulse;
+
+    assign burst_pulse =
+        burst_active && (burst_phase[0] == 1'b0);
+
+
+    // ================================================================
+    // Differential LVDS output
+    // ================================================================
+
+    OLVDS lvds_buf (
+        .A  (burst_pulse),
+        .Z  (LVDS_OUT_P),
+        .ZN (LVDS_OUT_N)
+    );
+
+endmodule
